@@ -132,26 +132,41 @@ func (r *repositoryResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether repository security scanning is enabled.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"scan_on_upload": rschema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether artifacts are scanned when uploaded.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"scan_on_proxy": rschema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether artifacts are scanned when proxied from an upstream repository.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"block_on_violation": rschema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether policy violations block repository operations.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"severity_threshold": rschema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Minimum severity threshold for blocking or policy evaluation. Valid values: `Low`, `Medium`, `High`, `Critical`.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"upstream_url": rschema.StringAttribute{
 				Optional:            true,
@@ -257,6 +272,15 @@ func (r *repositoryResource) Create(ctx context.Context, req resource.CreateRequ
 			return
 		}
 		applyRepositorySecurity(&state, security, plan.SeverityThreshold)
+	} else {
+		security, err := r.client.GetRepositorySecurity(ctx, repository.Key)
+		if err != nil {
+			addClientError(&resp.Diagnostics, "Read Artifact Keeper repository security", err)
+			return
+		}
+		if security.Config != nil {
+			applyRepositorySecurity(&state, security.Config, plan.SeverityThreshold)
+		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
@@ -341,6 +365,15 @@ func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequ
 			return
 		}
 		applyRepositorySecurity(&state, security, plan.SeverityThreshold)
+	} else {
+		security, err := r.client.GetRepositorySecurity(ctx, plan.Key.ValueString())
+		if err != nil {
+			addClientError(&resp.Diagnostics, "Read Artifact Keeper repository security", err)
+			return
+		}
+		if security.Config != nil {
+			applyRepositorySecurity(&state, security.Config, plan.SeverityThreshold)
+		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }

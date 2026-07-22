@@ -268,6 +268,8 @@ func (r *repositoryResource) Create(ctx context.Context, req resource.CreateRequ
 	if repositorySecurityConfigured(config) {
 		security, err := r.client.UpsertRepositorySecurity(ctx, repository.Key, repositorySecurityRequestFromModel(plan))
 		if err != nil {
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
 			return
 		}
@@ -275,11 +277,15 @@ func (r *repositoryResource) Create(ctx context.Context, req resource.CreateRequ
 	} else {
 		security, err := r.client.GetRepositorySecurity(ctx, repository.Key)
 		if err != nil {
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			addClientError(&resp.Diagnostics, "Read Artifact Keeper repository security", err)
 			return
 		}
 		if security.Config != nil {
 			applyRepositorySecurity(&state, security.Config, plan.SeverityThreshold)
+		} else {
+			clearRepositorySecurity(&state)
 		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
@@ -361,6 +367,8 @@ func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequ
 	if repositorySecurityConfigured(config) {
 		security, err := r.client.UpsertRepositorySecurity(ctx, plan.Key.ValueString(), repositorySecurityRequestFromModel(plan))
 		if err != nil {
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
 			return
 		}
@@ -368,11 +376,15 @@ func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequ
 	} else {
 		security, err := r.client.GetRepositorySecurity(ctx, plan.Key.ValueString())
 		if err != nil {
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			addClientError(&resp.Diagnostics, "Read Artifact Keeper repository security", err)
 			return
 		}
 		if security.Config != nil {
 			applyRepositorySecurity(&state, security.Config, plan.SeverityThreshold)
+		} else {
+			clearRepositorySecurity(&state)
 		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
@@ -522,6 +534,14 @@ func applyRepositorySecurity(model *repositoryResourceModel, security *akclient.
 		return
 	}
 	model.SeverityThreshold = types.StringValue(severityThresholdForTerraform(security.SeverityThreshold))
+}
+
+func clearRepositorySecurity(state *repositoryResourceModel) {
+	state.ScanEnabled = types.BoolNull()
+	state.ScanOnUpload = types.BoolNull()
+	state.ScanOnProxy = types.BoolNull()
+	state.BlockOnViolation = types.BoolNull()
+	state.SeverityThreshold = types.StringNull()
 }
 
 func severityThresholdForAPI(value string) string {

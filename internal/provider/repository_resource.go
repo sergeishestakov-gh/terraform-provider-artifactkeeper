@@ -331,8 +331,10 @@ func (r *repositoryResource) Read(ctx context.Context, req resource.ReadRequest,
 func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan repositoryResourceModel
 	var config repositoryResourceModel
+	var priorState repositoryResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &priorState)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -365,14 +367,22 @@ func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequ
 		state.Repositories = stringList(ctx, virtualMemberKeys(members.Members), &resp.Diagnostics)
 	}
 	if repositorySecurityConfigured(config) {
-		security, err := r.client.UpsertRepositorySecurity(ctx, plan.Key.ValueString(), repositorySecurityRequestFromModel(plan))
-		if err != nil {
-			clearRepositorySecurity(&state)
-			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
-			addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
-			return
+		if repositorySecurityChanged(priorState, plan) {
+			security, err := r.client.UpsertRepositorySecurity(ctx, plan.Key.ValueString(), repositorySecurityRequestFromModel(plan))
+			if err != nil {
+				clearRepositorySecurity(&state)
+				resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+				addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
+				return
+			}
+			applyRepositorySecurity(&state, security, plan.SeverityThreshold)
+		} else {
+			state.ScanEnabled = priorState.ScanEnabled
+			state.ScanOnUpload = priorState.ScanOnUpload
+			state.ScanOnProxy = priorState.ScanOnProxy
+			state.BlockOnViolation = priorState.BlockOnViolation
+			state.SeverityThreshold = priorState.SeverityThreshold
 		}
-		applyRepositorySecurity(&state, security, plan.SeverityThreshold)
 	} else {
 		security, err := r.client.GetRepositorySecurity(ctx, plan.Key.ValueString())
 		if err != nil {
@@ -501,6 +511,14 @@ func repositorySecurityConfigured(model repositoryResourceModel) bool {
 		explicitlyConfigured(model.ScanOnProxy) ||
 		explicitlyConfigured(model.BlockOnViolation) ||
 		explicitlyConfigured(model.SeverityThreshold)
+}
+
+func repositorySecurityChanged(prior, plan repositoryResourceModel) bool {
+	return !prior.ScanEnabled.Equal(plan.ScanEnabled) ||
+		!prior.ScanOnUpload.Equal(plan.ScanOnUpload) ||
+		!prior.ScanOnProxy.Equal(plan.ScanOnProxy) ||
+		!prior.BlockOnViolation.Equal(plan.BlockOnViolation) ||
+		!prior.SeverityThreshold.Equal(plan.SeverityThreshold)
 }
 
 func explicitlyConfigured(value any) bool {

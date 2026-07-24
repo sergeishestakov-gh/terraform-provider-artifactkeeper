@@ -91,7 +91,7 @@ func stringList(ctx context.Context, values []string, diagnostics *diag.Diagnost
 }
 
 func stringPtrValue(ptr *string) types.String {
-	if ptr == nil {
+	if ptr == nil || *ptr == "" {
 		return types.StringNull()
 	}
 	return types.StringValue(*ptr)

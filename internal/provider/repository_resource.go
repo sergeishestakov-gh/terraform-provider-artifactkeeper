@@ -132,26 +132,41 @@ func (r *repositoryResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether repository security scanning is enabled.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"scan_on_upload": rschema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether artifacts are scanned when uploaded.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"scan_on_proxy": rschema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether artifacts are scanned when proxied from an upstream repository.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"block_on_violation": rschema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether policy violations block repository operations.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"severity_threshold": rschema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Minimum severity threshold for blocking or policy evaluation. Valid values: `Low`, `Medium`, `High`, `Critical`.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"upstream_url": rschema.StringAttribute{
 				Optional:            true,
@@ -253,10 +268,25 @@ func (r *repositoryResource) Create(ctx context.Context, req resource.CreateRequ
 	if repositorySecurityConfigured(config) {
 		security, err := r.client.UpsertRepositorySecurity(ctx, repository.Key, repositorySecurityRequestFromModel(plan))
 		if err != nil {
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
 			return
 		}
 		applyRepositorySecurity(&state, security, plan.SeverityThreshold)
+	} else {
+		security, err := r.client.GetRepositorySecurity(ctx, repository.Key)
+		if err != nil {
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+			addClientError(&resp.Diagnostics, "Read Artifact Keeper repository security", err)
+			return
+		}
+		if security.Config != nil {
+			applyRepositorySecurity(&state, security.Config, plan.SeverityThreshold)
+		} else {
+			clearRepositorySecurity(&state)
+		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
@@ -301,8 +331,10 @@ func (r *repositoryResource) Read(ctx context.Context, req resource.ReadRequest,
 func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan repositoryResourceModel
 	var config repositoryResourceModel
+	var priorState repositoryResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &priorState)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -335,12 +367,35 @@ func (r *repositoryResource) Update(ctx context.Context, req resource.UpdateRequ
 		state.Repositories = stringList(ctx, virtualMemberKeys(members.Members), &resp.Diagnostics)
 	}
 	if repositorySecurityConfigured(config) {
-		security, err := r.client.UpsertRepositorySecurity(ctx, plan.Key.ValueString(), repositorySecurityRequestFromModel(plan))
+		if repositorySecurityChanged(priorState, plan) {
+			security, err := r.client.UpsertRepositorySecurity(ctx, plan.Key.ValueString(), repositorySecurityRequestFromModel(plan))
+			if err != nil {
+				clearRepositorySecurity(&state)
+				resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+				addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
+				return
+			}
+			applyRepositorySecurity(&state, security, plan.SeverityThreshold)
+		} else {
+			state.ScanEnabled = priorState.ScanEnabled
+			state.ScanOnUpload = priorState.ScanOnUpload
+			state.ScanOnProxy = priorState.ScanOnProxy
+			state.BlockOnViolation = priorState.BlockOnViolation
+			state.SeverityThreshold = priorState.SeverityThreshold
+		}
+	} else {
+		security, err := r.client.GetRepositorySecurity(ctx, plan.Key.ValueString())
 		if err != nil {
-			addClientError(&resp.Diagnostics, "Configure Artifact Keeper repository security", err)
+			clearRepositorySecurity(&state)
+			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+			addClientError(&resp.Diagnostics, "Read Artifact Keeper repository security", err)
 			return
 		}
-		applyRepositorySecurity(&state, security, plan.SeverityThreshold)
+		if security.Config != nil {
+			applyRepositorySecurity(&state, security.Config, plan.SeverityThreshold)
+		} else {
+			clearRepositorySecurity(&state)
+		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
@@ -458,6 +513,14 @@ func repositorySecurityConfigured(model repositoryResourceModel) bool {
 		explicitlyConfigured(model.SeverityThreshold)
 }
 
+func repositorySecurityChanged(prior, plan repositoryResourceModel) bool {
+	return !prior.ScanEnabled.Equal(plan.ScanEnabled) ||
+		!prior.ScanOnUpload.Equal(plan.ScanOnUpload) ||
+		!prior.ScanOnProxy.Equal(plan.ScanOnProxy) ||
+		!prior.BlockOnViolation.Equal(plan.BlockOnViolation) ||
+		!prior.SeverityThreshold.Equal(plan.SeverityThreshold)
+}
+
 func explicitlyConfigured(value any) bool {
 	switch v := value.(type) {
 	case types.Bool:
@@ -489,6 +552,14 @@ func applyRepositorySecurity(model *repositoryResourceModel, security *akclient.
 		return
 	}
 	model.SeverityThreshold = types.StringValue(severityThresholdForTerraform(security.SeverityThreshold))
+}
+
+func clearRepositorySecurity(state *repositoryResourceModel) {
+	state.ScanEnabled = types.BoolNull()
+	state.ScanOnUpload = types.BoolNull()
+	state.ScanOnProxy = types.BoolNull()
+	state.BlockOnViolation = types.BoolNull()
+	state.SeverityThreshold = types.StringNull()
 }
 
 func severityThresholdForAPI(value string) string {

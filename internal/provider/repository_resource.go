@@ -324,6 +324,8 @@ func (r *repositoryResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 	if security.Config != nil {
 		applyRepositorySecurity(&newState, security.Config, state.SeverityThreshold)
+	} else {
+		clearRepositorySecurity(&newState)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
